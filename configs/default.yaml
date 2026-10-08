@@ -103,3 +103,21 @@ engine:
   online_learning: false      # let Drain3 create new templates while serving
   max_alerts: 1000
   max_keys: 50000             # LRU cap on live per-key buffers
+
+remediation:
+  enabled: true
+  mode: simulation            # simulation | dry_run | kubernetes
+  auto_remediate: true        # autonomously take action when critical/cascade alerts occur
+  verification_window_s: 60   # time window to verify if anomaly resolved after remediation
+  safety:
+    cooldown_s: 60            # minimum time between actions on the same component
+    max_simultaneous: 2       # maximum concurrent in-flight remediations
+    max_blast_radius: 0.75    # halts automated action if estimated cascade spread exceeds this
+    allowlist: ["*"]          # components eligible for automated actions (wildcard supported)
+    allowed_actions:
+      - restart_pod
+      - scale_deployment
+      - circuit_break
+      - rate_limit
+      - drain_node
+      - quarantine_pod

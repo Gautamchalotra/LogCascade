@@ -153,6 +153,81 @@
     <div id="cascade-state-content">Loading...</div>
 </div>
 
+<div class="section">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="margin: 0;">Autonomous Remediation Agent (Simulation)</h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="badge badge-none" id="remediation-mode-badge">MODE: SIMULATION</span>
+            <button class="btn" style="padding: 4px 10px; font-size: 0.75em;" onclick="resetRemediation()">Reset Simulation</button>
+        </div>
+    </div>
+    
+    <div style="margin-bottom: 15px; font-size: 0.85em;" id="remediation-summary">
+        Loading agent state...
+    </div>
+
+    <!-- Manual trigger form -->
+    <div style="margin-bottom: 15px; padding: 10px; border: var(--border); background: var(--bg-muted);">
+        <h4 style="margin-top: 0; margin-bottom: 10px; text-transform: uppercase; font-size: 0.75em; color: var(--text-muted);">Trigger Simulated Action</h4>
+        <div class="controls-row" style="margin-bottom: 0;">
+            <select id="action-type-select" style="min-width: 220px;">
+                <option value="restart_pod">restart_pod (K8s Rolling Restart)</option>
+                <option value="scale_deployment">scale_deployment (Autoscale Replicas)</option>
+                <option value="circuit_break">circuit_break (Service Mesh Isolation)</option>
+                <option value="rate_limit">rate_limit (Traffic Throttle)</option>
+                <option value="drain_node">drain_node (Cordon & Evict Node)</option>
+                <option value="quarantine_pod">quarantine_pod (Endpoint Isolation)</option>
+            </select>
+            <input type="text" id="action-target-input" placeholder="Target e.g. dfs.DataNode$DataXceiver" style="border: var(--border); padding: 7px; font-family: inherit; font-size: 0.85em; flex: 1;" />
+            <button class="btn" onclick="triggerManualAction()">Execute</button>
+        </div>
+        <div id="action-feedback" style="display: none; margin-top: 8px; font-family: monospace; font-size: 0.8em;"></div>
+    </div>
+
+    <!-- Simulated Cluster State -->
+    <h4 style="text-transform: uppercase; font-size: 0.75em; color: var(--text-muted); margin-bottom: 8px;">Simulated Kubernetes Cluster & Mesh State</h4>
+    <div style="max-height: 220px; overflow-y: auto; margin-bottom: 15px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Component / Deployment</th>
+                    <th>Replicas</th>
+                    <th>Status</th>
+                    <th>Restarts</th>
+                    <th>Assigned Node</th>
+                    <th>Mesh Policy</th>
+                    <th>Last Action</th>
+                </tr>
+            </thead>
+            <tbody id="cluster-body">
+                <tr><td colspan="7" class="text-center muted">Loading cluster state...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Autonomous Action History -->
+    <h4 style="text-transform: uppercase; font-size: 0.75em; color: var(--text-muted); margin-bottom: 8px;">Remediation Decisions & Execution Log</h4>
+    <div style="max-height: 250px; overflow-y: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Time</th>
+                    <th>Target</th>
+                    <th>Action</th>
+                    <th>Trigger</th>
+                    <th>Safety Check</th>
+                    <th>Status</th>
+                    <th>Verification</th>
+                </tr>
+            </thead>
+            <tbody id="remediation-history-body">
+                <tr><td colspan="8" class="text-center muted">No remediation actions executed yet.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <details id="templates-section" ontoggle="loadTemplates()">
     <summary id="templates-summary">LOG TEMPLATES (0)</summary>
     <div id="templates-list">Loading...</div>
@@ -423,16 +498,139 @@
         }
     }
 
+    async function updateRemediation() {
+        try {
+            const state = await fetchJson('/remediation/state');
+            const history = await fetchJson('/remediation/history?limit=30');
+
+            document.getElementById('remediation-mode-badge').textContent = `MODE: ${(state.mode || 'SIMULATION').toUpperCase()}`;
+            
+            const stats = state.stats || {};
+            const activeInFlight = state.active_in_flight || [];
+            document.getElementById('remediation-summary').innerHTML = `
+                Autonomous Policy: <strong>${state.auto_remediate ? 'ENABLED' : 'PAUSED'}</strong> &bull;
+                Total Decisions: <strong>${stats.total_actions || 0}</strong> &bull;
+                Applied: <strong>${stats.applied_actions || 0}</strong> &bull;
+                Blocked by Safety: <strong>${stats.blocked_actions || 0}</strong> &bull;
+                Resolved: <strong>${stats.resolved_actions || 0}</strong> &bull;
+                Active In-Flight: <strong>${activeInFlight.length > 0 ? activeInFlight.join(', ') : 'None'}</strong>
+            `;
+
+            // Cluster & Mesh Table
+            const clusterBody = document.getElementById('cluster-body');
+            const deps = state.cluster?.deployments || {};
+            const meshCB = state.mesh?.circuit_breakers || {};
+            const meshRL = state.mesh?.rate_limits || {};
+            
+            const depKeys = Object.keys(deps);
+            if (depKeys.length === 0) {
+                clusterBody.innerHTML = `<tr><td colspan="7" class="text-center muted">No simulated deployments available.</td></tr>`;
+            } else {
+                clusterBody.innerHTML = depKeys.map(k => {
+                    const d = deps[k];
+                    let meshPolicy = 'Standard';
+                    if (meshCB[k]?.active) meshPolicy = '<span class="badge badge-critical">CIRCUIT BREAKER</span>';
+                    else if (meshRL[k]?.active) meshPolicy = `<span class="badge badge-warning">RATE LIMIT (${meshRL[k].rps} rps)</span>`;
+                    
+                    let statusBadge = d.quarantined ? '<span class="badge badge-critical">QUARANTINED</span>' : d.status;
+                    let lastAct = d.last_action ? `${d.last_action} (${formatTime(d.last_action_ts)})` : '—';
+                    
+                    return `<tr>
+                        <td class="bold monospace">${d.name}</td>
+                        <td>${d.replicas} / ${d.available_replicas}</td>
+                        <td>${statusBadge}</td>
+                        <td>${d.restart_count}</td>
+                        <td class="monospace">${d.assigned_node || '—'}</td>
+                        <td>${meshPolicy}</td>
+                        <td>${lastAct}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // History Table
+            const histBody = document.getElementById('remediation-history-body');
+            if (!history || history.length === 0) {
+                histBody.innerHTML = `<tr><td colspan="8" class="text-center muted">No remediation actions executed yet.</td></tr>`;
+            } else {
+                histBody.innerHTML = history.map(h => {
+                    let statusBadge = h.execution_status === 'APPLIED' ? 
+                        '<span class="badge badge-critical">APPLIED</span>' : 
+                        '<span class="badge badge-warning">BLOCKED</span>';
+                    
+                    let verifBadge = h.verification_status;
+                    if (verifBadge === 'RESOLVED') verifBadge = '<strong>✓ RESOLVED</strong>';
+                    else if (verifBadge === 'ESCALATED') verifBadge = '<strong>▲ ESCALATED</strong>';
+                    else verifBadge = '<span class="muted">VERIFYING</span>';
+
+                    let safetyReason = h.safety_reason || '';
+                    let shortReason = safetyReason.length > 35 ? safetyReason.substring(0, 35) + '...' : safetyReason;
+                    let safetyText = h.safety_approved ? 'Passed' : `<span class="muted" title="${safetyReason}">${shortReason}</span>`;
+
+                    return `<tr>
+                        <td class="monospace">${h.id}</td>
+                        <td class="monospace">${formatTime(h.timestamp)}</td>
+                        <td class="bold">${h.target_component}</td>
+                        <td class="monospace"><strong>${h.action}</strong></td>
+                        <td>${(h.trigger_severity || '').toUpperCase()} (${h.cascade_level})</td>
+                        <td>${safetyText}</td>
+                        <td>${statusBadge}</td>
+                        <td>${verifBadge}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+        } catch (e) {
+            console.error('Error updating remediation:', e);
+        }
+    }
+
+    async function triggerManualAction() {
+        const action = document.getElementById('action-type-select').value;
+        const target = document.getElementById('action-target-input').value.trim();
+        const feedback = document.getElementById('action-feedback');
+        
+        if (!target) {
+            feedback.style.display = 'block';
+            feedback.textContent = 'Please enter a target component name.';
+            return;
+        }
+
+        try {
+            feedback.style.display = 'block';
+            feedback.textContent = 'Executing simulated action...';
+            const res = await fetchJson('/remediation/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, target, reason: 'dashboard_manual_trigger' })
+            });
+            feedback.textContent = `Action ${res.action} on ${res.target_component}: ${res.execution_status} (${res.safety_reason || 'Success'})`;
+            updateRemediation();
+        } catch (e) {
+            feedback.textContent = `Error: ${e.message}`;
+        }
+    }
+
+    async function resetRemediation() {
+        try {
+            await fetchJson('/remediation/reset', { method: 'POST' });
+            updateRemediation();
+        } catch (e) {
+            alert(`Reset error: ${e.message}`);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         updateHealth();
         updateStatus();
         updateAlerts();
         updateCascade();
+        updateRemediation();
 
         setInterval(updateHealth, 3000);
         setInterval(updateStatus, 3000);
         setInterval(updateAlerts, 3000);
         setInterval(updateCascade, 3000);
+        setInterval(updateRemediation, 3000);
     });
 
 </script>

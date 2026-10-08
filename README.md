@@ -942,6 +942,15 @@ GET  /eval?dataset=HDFS                — fetch cached evaluation results
 POST /threshold/reset     — reset the dynamic threshold history
 ```
 
+### Autonomous Remediation & Simulation Agent
+
+```text
+GET  /remediation/state            — agent state, active in-flight actions, simulated K8s cluster & mesh state
+GET  /remediation/history?limit=50 — decision log (action, target, safety check, status, verification)
+POST /remediation/action           — execute simulated action: {"action": "restart_pod", "target": "component"}
+POST /remediation/reset            — reset simulated cluster state and decision history
+```
+
 ### Interactive API Docs
 
 FastAPI automatically generates interactive documentation:

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from api.schemas import IngestRequest, IngestResponse
+from api.schemas import ActionRequest, IngestRequest, IngestResponse
 from src.common.config import load_config
 from src.common.logging_utils import get_logger
 
@@ -129,6 +129,28 @@ def create_app(engine=None) -> FastAPI:
         if not eval_path.exists():
             raise HTTPException(404, "no evaluation results; run evaluate first")
         return json.loads(eval_path.read_text())
+
+    @app.get("/remediation/state")
+    def remediation_state(eng=Depends(get_engine_opt)):
+        if eng is None:
+            return {"mode": "simulation", "auto_remediate": False, "stats": {}, "cluster": {}, "mesh": {}}
+        return eng.remediation_state()
+
+    @app.get("/remediation/history")
+    def remediation_history(limit: int = 50, eng=Depends(get_engine_opt)):
+        if eng is None:
+            return []
+        return eng.remediation_history(limit)
+
+    @app.post("/remediation/action")
+    def trigger_remediation_action(req: ActionRequest, eng=Depends(get_engine)):
+        event = eng.remediation.trigger_manual_action(req.action, req.target, req.reason)
+        return event.to_dict()
+
+    @app.post("/remediation/reset")
+    def reset_remediation(eng=Depends(get_engine)):
+        eng.remediation.reset()
+        return {"ok": True}
 
     return app
 

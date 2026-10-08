@@ -75,6 +75,18 @@ class CommandActuator(Actuator):
             subprocess.run(argv, check=False, timeout=30)
 
 
+class RemediationActuator(Actuator):
+    """Bridges alerts to the autonomous RemediationAgent."""
+    name = "remediation"
+
+    def __init__(self, agent, min_severity: str = "warning"):
+        super().__init__(min_severity)
+        self.agent = agent
+
+    def handle(self, alert: Alert) -> None:
+        self.agent.process_alert(alert, {"level": alert.cascade_level, "at_risk": alert.at_risk})
+
+
 class ActuatorChain:
     def __init__(self, actuators: list[Actuator], cooldown_s: float = 60.0):
         self.actuators, self.cooldown_s = actuators, cooldown_s
@@ -97,15 +109,17 @@ class ActuatorChain:
         return fired
 
 
-def build_actuators(cfg: dict) -> ActuatorChain:
-    c = cfg["actuator"]
+def build_actuators(cfg: dict, remediation=None) -> ActuatorChain:
+    c = cfg.get("actuator", {})
     acts: list[Actuator] = []
-    if c["log"]["enabled"]:
-        acts.append(LogActuator(c["log"]["min_severity"]))
-    if c["webhook"]["enabled"]:
+    if c.get("log", {}).get("enabled", True):
+        acts.append(LogActuator(c.get("log", {}).get("min_severity", "warning")))
+    if c.get("webhook", {}).get("enabled", False):
         w = c["webhook"]
-        acts.append(WebhookActuator(w["url"], w["timeout_s"], w["min_severity"]))
-    if c["command"]["enabled"]:
+        acts.append(WebhookActuator(w["url"], w.get("timeout_s", 2.0), w.get("min_severity", "critical")))
+    if c.get("command", {}).get("enabled", False):
         m = c["command"]
-        acts.append(CommandActuator(m["argv"], m["dry_run"], m["min_severity"]))
-    return ActuatorChain(acts, c["cooldown_s"])
+        acts.append(CommandActuator(m["argv"], m.get("dry_run", True), m.get("min_severity", "critical")))
+    if remediation is not None:
+        acts.append(RemediationActuator(remediation, min_severity="warning"))
+    return ActuatorChain(acts, c.get("cooldown_s", 60.0))
