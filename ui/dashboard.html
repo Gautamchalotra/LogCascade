@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LogCascade Dashboard</title>
+<style>
+    :root {
+        --border: 1px solid #ccc;
+        --text: #000;
+        --text-muted: #666;
+        --bg: #fff;
+        --bg-muted: #f9f9f9;
+        --warning: #888;
+        --critical: #222;
+    }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: var(--text);
+        background: var(--bg);
+        margin: 0;
+        padding: 20px;
+        line-height: 1.5;
+        max-width: 1400px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    h1, h2, h3, h4 { margin-top: 0; }
+    .section { border: var(--border); padding: 15px; margin-bottom: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: var(--border); padding-bottom: 15px; margin-bottom: 20px; }
+    .title { font-weight: bold; text-transform: uppercase; letter-spacing: 2px; font-size: 1.5em; }
+    
+    .status-indicator { display: flex; align-items: center; gap: 8px; font-size: 0.9em; text-transform: uppercase; font-weight: bold; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #ccc; }
+    .status-dot.healthy { background: var(--text); border-color: var(--text); }
+    .status-dot.unhealthy { background: transparent; border-color: var(--text); }
+
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; }
+    .stat-card { border: var(--border); padding: 10px; text-align: center; }
+    .stat-label { font-size: 0.75em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 5px; }
+    .stat-value { font-size: 1.25em; font-weight: bold; }
+
+    .btn { border: var(--border); background: var(--bg); color: var(--text); padding: 8px 16px; cursor: pointer; text-transform: uppercase; font-family: inherit; font-size: 0.85em; font-weight: bold; }
+    .btn:hover:not(:disabled) { background: #eee; }
+    .btn:disabled { color: var(--text-muted); cursor: not-allowed; }
+
+    .controls-row { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; }
+    select { border: var(--border); padding: 7px; font-family: inherit; text-transform: uppercase; font-size: 0.85em; }
+
+    .output-box { border: var(--border); background: var(--bg-muted); padding: 10px; font-family: monospace; font-size: 0.85em; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+
+    textarea { width: 100%; box-sizing: border-box; border: var(--border); padding: 10px; font-family: monospace; font-size: 0.85em; resize: vertical; margin-bottom: 10px; background: var(--bg); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+    th, td { border: var(--border); padding: 8px; text-align: left; vertical-align: top; }
+    th { text-transform: uppercase; font-size: 0.8em; color: var(--text-muted); font-weight: normal; }
+    
+    .badge { padding: 2px 6px; font-size: 0.75em; text-transform: uppercase; color: #fff; font-weight: bold; }
+    .badge-warning { background: var(--warning); }
+    .badge-critical { background: var(--critical); }
+    .badge-none { background: #ccc; color: #000; }
+
+    .monospace { font-family: monospace; }
+    .bold { font-weight: bold; }
+    .muted { color: var(--text-muted); }
+    .text-center { text-align: center; }
+
+    .metrics-container { display: flex; gap: 20px; flex-wrap: wrap; }
+    .metric-box { border: var(--border); padding: 15px; flex: 1; min-width: 300px; }
+    .metric-box h4 { text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px dotted #ccc; padding-bottom: 5px; }
+    .metric-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.9em; }
+
+    .footer { text-align: center; font-size: 0.8em; color: var(--text-muted); border-top: var(--border); padding-top: 15px; margin-top: 40px; }
+
+    details { border: var(--border); padding: 10px; margin-bottom: 20px; }
+    summary { cursor: pointer; font-weight: bold; text-transform: uppercase; font-size: 0.9em; }
+    .template-item { display: flex; gap: 15px; padding: 8px 0; border-bottom: 1px solid #eee; font-size: 0.85em; }
+    .template-item:last-child { border-bottom: none; }
+    .template-id { width: 80px; flex-shrink: 0; font-weight: bold; }
+    .template-text { flex-grow: 1; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div class="title">LOG CASCADE</div>
+    <div class="status-indicator">
+        <div id="health-dot" class="status-dot"></div>
+        <span id="health-text">Checking...</span>
+    </div>
+</div>
+
+<div class="section">
+    <div class="status-grid">
+        <div class="stat-card"><div class="stat-label">Dataset</div><div class="stat-value" id="stat-dataset">—</div></div>
+        <div class="stat-card"><div class="stat-label">Model Kind</div><div class="stat-value" id="stat-model">—</div></div>
+        <div class="stat-card"><div class="stat-label">Vocab Size</div><div class="stat-value" id="stat-vocab">—</div></div>
+        <div class="stat-card"><div class="stat-label">Window Size</div><div class="stat-value" id="stat-window">—</div></div>
+        <div class="stat-card"><div class="stat-label">Lines Proc</div><div class="stat-value" id="stat-lines">—</div></div>
+        <div class="stat-card"><div class="stat-label">Wins Scored</div><div class="stat-value" id="stat-scored">—</div></div>
+        <div class="stat-card"><div class="stat-label">Alerts Fired</div><div class="stat-value" id="stat-alerts">—</div></div>
+        <div class="stat-card"><div class="stat-label">Last Score</div><div class="stat-value" id="stat-last-score">—</div></div>
+        <div class="stat-card"><div class="stat-label">Last Thresh</div><div class="stat-value" id="stat-last-thresh">—</div></div>
+    </div>
+</div>
+
+<div class="section">
+    <h3>Pipeline Controls</h3>
+    <div class="controls-row">
+        <select id="dataset-select">
+            <option value="HDFS">HDFS</option>
+            <option value="BGL">BGL</option>
+            <option value="Thunderbird">Thunderbird</option>
+            <option value="ZooKeeper">ZooKeeper</option>
+        </select>
+        <button class="btn" id="btn-prepare" onclick="runPipeline('prepare')">Prepare</button>
+        <button class="btn" id="btn-train" onclick="runPipeline('train')">Train</button>
+        <button class="btn" id="btn-evaluate" onclick="runPipeline('evaluate')">Evaluate</button>
+    </div>
+    <div class="output-box" id="pipeline-output" style="display: none;"></div>
+</div>
+
+<div class="section">
+    <h3>Log Ingestion</h3>
+    <textarea id="ingest-lines" rows="5" placeholder="Paste raw log lines here..."></textarea>
+    <button class="btn" id="btn-ingest" onclick="submitIngest()">Submit</button>
+    <div class="output-box" id="ingest-output" style="display: none; margin-top: 10px;"></div>
+</div>
+
+<div class="section">
+    <h3>Alerts</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Component</th>
+                <th>Score</th>
+                <th>Threshold</th>
+                <th>Severity</th>
+                <th>Cascade</th>
+                <th>At Risk</th>
+                <th>Suspect Template</th>
+            </tr>
+        </thead>
+        <tbody id="alerts-body">
+            <tr><td colspan="8" class="text-center muted">Loading...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="section">
+    <h3>Cascade State</h3>
+    <div id="cascade-state-content">Loading...</div>
+</div>
+
+<details id="templates-section" ontoggle="loadTemplates()">
+    <summary id="templates-summary">LOG TEMPLATES (0)</summary>
+    <div id="templates-list">Loading...</div>
+</details>
+
+<div class="section">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h3 style="margin: 0;">Evaluation Metrics</h3>
+        <button class="btn" onclick="loadEval()">Load Eval</button>
+    </div>
+    <div class="metrics-container" id="eval-content">
+        <div class="muted">Click Load Eval to fetch evaluation metrics.</div>
+    </div>
+</div>
+
+<div class="footer">
+    LogCascade Agent • Unsupervised Log Anomaly & Failure Cascade Predictor
+</div>
+
+<script>
+    const API_BASE = '';
+    
+    function formatTime(epoch) {
+        if (!epoch) return '—';
+        return new Date(epoch * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    function formatNumber(num) {
+        if (num === null || num === undefined) return '—';
+        return Number(num).toFixed(3);
+    }
+
+    async function fetchJson(endpoint, options = {}) {
+        try {
+            const res = await fetch(`${API_BASE}${endpoint}`, options);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || `HTTP error ${res.status}`);
+            return data;
+        } catch (e) {
+            console.error(`Error fetching ${endpoint}:`, e);
+            throw e;
+        }
+    }
+
+    async function updateHealth() {
+        const dot = document.getElementById('health-dot');
+        const text = document.getElementById('health-text');
+        try {
+            const data = await fetchJson('/health');
+            if (data.engine_loaded) {
+                dot.className = 'status-dot healthy';
+                text.textContent = 'Engine Loaded';
+            } else {
+                dot.className = 'status-dot unhealthy';
+                text.textContent = 'Engine Not Loaded';
+            }
+        } catch (e) {
+            dot.className = 'status-dot unhealthy';
+            text.textContent = 'Offline';
+        }
+    }
+
+    async function updateStatus() {
+        try {
+            const data = await fetchJson('/status');
+            document.getElementById('stat-dataset').textContent = data.dataset || '—';
+            document.getElementById('stat-model').textContent = data.model || '—';
+            document.getElementById('stat-vocab').textContent = data.vocab_size ?? '—';
+            document.getElementById('stat-window').textContent = data.window_size ?? '—';
+            document.getElementById('stat-lines').textContent = data.lines ?? '—';
+            document.getElementById('stat-scored').textContent = data.windows ?? '—';
+            document.getElementById('stat-alerts').textContent = data.alerts ?? '—';
+            document.getElementById('stat-last-score').textContent = formatNumber(data.last_score);
+            document.getElementById('stat-last-thresh').textContent = formatNumber(data.last_threshold);
+        } catch (e) {
+            ['dataset', 'model', 'vocab', 'window', 'lines', 'scored', 'alerts', 'last-score', 'last-thresh'].forEach(id => {
+                document.getElementById(`stat-${id}`).textContent = '—';
+            });
+        }
+    }
+
+    async function updateAlerts() {
+        const tbody = document.getElementById('alerts-body');
+        try {
+            const alerts = await fetchJson('/alerts?limit=50');
+            if (!alerts || alerts.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center muted">No alerts yet.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = alerts.map(a => {
+                let badgeClass = a.severity === 'critical' ? 'badge-critical' : 'badge-warning';
+                let suspect = a.suspect_template || '';
+                if (suspect.length > 60) suspect = suspect.substring(0, 60) + '...';
+                let atRisk = (a.at_risk || []).map(r => Array.isArray(r) ? `${r[0]} (${(r[1]*100).toFixed(0)}%)` : r).join(', ');
+                
+                return `<tr>
+                    <td class="monospace">${formatTime(a.ts)}</td>
+                    <td class="bold">${a.component || '—'}</td>
+                    <td>${formatNumber(a.score)}</td>
+                    <td>${formatNumber(a.threshold)}</td>
+                    <td><span class="badge ${badgeClass}">${(a.severity || 'unknown').toUpperCase()}</span></td>
+                    <td>${a.cascade_level || '—'}</td>
+                    <td>${atRisk || '—'}</td>
+                    <td class="monospace">${suspect}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center muted">Error loading alerts.</td></tr>`;
+        }
+    }
+
+    async function updateCascade() {
+        const div = document.getElementById('cascade-state-content');
+        try {
+            const data = await fetchJson('/cascade');
+            if (data.level === 'none') {
+                div.innerHTML = `<div class="muted">No active cascade</div>`;
+                return;
+            }
+            let html = `<div style="margin-bottom: 10px;">Level: <strong style="text-transform: uppercase;">${data.level}</strong></div>`;
+            html += `<div style="margin-bottom: 10px;">Spread count: <strong>${data.spread || 0}</strong></div>`;
+            html += `<div style="margin-bottom: 10px;">Active components: ${(data.active || []).join(', ') || 'None'}</div>`;
+            
+            if (data.at_risk && data.at_risk.length > 0) {
+                html += `<div><strong>At Risk Components:</strong><ul>`;
+                for (const pair of data.at_risk) {
+                    html += `<li>${pair[0]} — risk: ${(pair[1] * 100).toFixed(1)}%</li>`;
+                }
+                html += `</ul></div>`;
+            } else {
+                html += `<div>No components currently at risk.</div>`;
+            }
+            div.innerHTML = html;
+        } catch (e) {
+            div.innerHTML = `<div class="muted">Error loading cascade state.</div>`;
+        }
+    }
+
+    async function runPipeline(action) {
+        const btn = document.getElementById(`btn-${action}`);
+        const out = document.getElementById('pipeline-output');
+        const dataset = document.getElementById('dataset-select').value;
+        
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = 'RUNNING...';
+        out.style.display = 'block';
+        out.textContent = `Starting ${action} for dataset ${dataset}...\n`;
+        
+        try {
+            const data = await fetchJson(`/pipeline/${action}?dataset=${dataset}`, { method: 'POST' });
+            out.textContent += JSON.stringify(data, null, 2);
+        } catch (e) {
+            out.textContent += `ERROR: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+
+    async function submitIngest() {
+        const btn = document.getElementById('btn-ingest');
+        const lines = document.getElementById('ingest-lines').value.split('\n').filter(l => l.trim().length > 0);
+        const out = document.getElementById('ingest-output');
+        
+        if (lines.length === 0) return;
+
+        btn.disabled = true;
+        btn.textContent = 'SUBMITTING...';
+        out.style.display = 'block';
+        out.textContent = 'Processing...';
+
+        try {
+            const data = await fetchJson('/ingest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lines })
+            });
+            out.textContent = `Lines processed: ${data.lines}\nAlerts returned: ${data.alerts.length}\nLast Score: ${formatNumber(data.last_score)}\nLast Threshold: ${formatNumber(data.last_threshold)}`;
+            document.getElementById('ingest-lines').value = '';
+        } catch (e) {
+            out.textContent = `ERROR: ${e.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'SUBMIT';
+        }
+    }
+
+    let templatesLoaded = false;
+    async function loadTemplates() {
+        const details = document.getElementById('templates-section');
+        if (!details.open || templatesLoaded) return;
+        
+        const list = document.getElementById('templates-list');
+        list.innerHTML = 'Loading...';
+        try {
+            const data = await fetchJson('/templates?limit=200');
+            const entries = Object.entries(data);
+            document.getElementById('templates-summary').textContent = `LOG TEMPLATES (${entries.length})`;
+            
+            if (entries.length === 0) {
+                list.innerHTML = '<div class="muted">No templates found.</div>';
+                return;
+            }
+            
+            list.innerHTML = entries.map(([eid, tpl]) => 
+                `<div class="template-item">
+                    <div class="template-id monospace">E${eid}</div>
+                    <div class="template-text monospace">${tpl}</div>
+                </div>`
+            ).join('');
+            templatesLoaded = true;
+        } catch (e) {
+            list.innerHTML = '<div class="muted">Error loading templates.</div>';
+        }
+    }
+
+    async function loadEval() {
+        const div = document.getElementById('eval-content');
+        const dataset = document.getElementById('dataset-select').value;
+        div.innerHTML = '<div class="muted">Loading evaluation metrics...</div>';
+        
+        try {
+            const data = await fetchJson(`/eval?dataset=${dataset}`);
+            let html = '';
+
+            const renderMetrics = (title, metrics) => {
+                if (!metrics) return `<div class="metric-box"><h4>${title}</h4><div class="muted">No data</div></div>`;
+                let mHtml = `<div class="metric-box"><h4>${title}</h4>`;
+                
+                if (metrics.note) {
+                    mHtml += `<div class="muted" style="font-style: italic;">${metrics.note}</div>`;
+                } else {
+                    mHtml += `<div class="metric-row"><span>AUROC</span><strong>${formatNumber(metrics.auroc)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>AUPRC</span><strong>${formatNumber(metrics.auprc)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Best F1</span><strong>${formatNumber(metrics.best_f1)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Precision @ best</span><strong>${formatNumber(metrics['precision@best'])}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Recall @ best</span><strong>${formatNumber(metrics['recall@best'])}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Threshold @ best</span><strong>${formatNumber(metrics['threshold@best'])}</strong></div>`;
+                }
+                
+                if (metrics.dynamic_threshold) {
+                    mHtml += `<h4 style="margin-top: 15px;">Dynamic Threshold</h4>`;
+                    mHtml += `<div class="metric-row"><span>F1</span><strong>${formatNumber(metrics.dynamic_threshold.f1)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Precision</span><strong>${formatNumber(metrics.dynamic_threshold.precision)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Recall</span><strong>${formatNumber(metrics.dynamic_threshold.recall)}</strong></div>`;
+                    mHtml += `<div class="metric-row"><span>Alerts Count</span><strong>${metrics.dynamic_threshold.alerts ?? '—'}</strong></div>`;
+                }
+
+                mHtml += `</div>`;
+                return mHtml;
+            };
+
+            html += renderMetrics('Autoencoder', data.autoencoder);
+            html += renderMetrics('Isolation Forest', data.isolation_forest);
+            
+            if (data.cascade) {
+                html += `<div class="metric-box"><h4>Cascade Analysis</h4>`;
+                html += `<div class="metric-row"><span>Alerts</span><strong>${data.cascade.alerts ?? '—'}</strong></div>`;
+                html += `<div class="metric-row"><span>Components</span><strong>${data.cascade.components ?? '—'}</strong></div>`;
+                html += `<div class="metric-row"><span>Edges</span><strong>${data.cascade.edges ?? '—'}</strong></div>`;
+                html += `</div>`;
+            }
+            
+            div.innerHTML = html;
+        } catch (e) {
+            div.innerHTML = `<div class="muted">Error loading evaluation metrics: ${e.message}</div>`;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        updateHealth();
+        updateStatus();
+        updateAlerts();
+        updateCascade();
+
+        setInterval(updateHealth, 3000);
+        setInterval(updateStatus, 3000);
+        setInterval(updateAlerts, 3000);
+        setInterval(updateCascade, 3000);
+    });
+
+</script>
+</body>
+</html>

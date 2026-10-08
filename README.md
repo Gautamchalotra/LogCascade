@@ -692,7 +692,441 @@ log-cascade-agent/
 
 ---
 
-# 16. Team Responsibilities
+# Getting Started
+
+## Prerequisites
+
+```text
+Python 3.10+
+pip
+Git
+```
+
+Optional for production deployment:
+
+```text
+Docker
+Kubernetes cluster
+```
+
+## Installation
+
+Clone the repository and install dependencies:
+
+```powershell
+git clone <repository-url>
+cd LogCascade
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/macOS
+pip install -r requirements.txt
+```
+
+## Data Setup
+
+Download a LogHub dataset and place it under `data/raw/`. The default configuration expects HDFS:
+
+```text
+data/raw/HDFS_v1/HDFS.log
+data/raw/HDFS_v1/preprocessed/anomaly_label.csv   (optional, for supervised evaluation)
+```
+
+A small smoke-test sample `data/raw/HDFS/HDFS_2k.log` can also be used. Copy or symlink it to the configured path, or override at runtime.
+
+Supported datasets: `HDFS`, `BGL`, `Thunderbird`, `ZooKeeper`. Each has its own path and windowing configuration in `configs/default.yaml`.
+
+## Offline Pipeline
+
+The system has four pipeline stages that must be run in order before using the live dashboard. Run them from the project root:
+
+### Step 1 — Prepare
+
+Parses raw logs through Drain3, extracts event templates, and builds sliding-window sequences:
+
+```powershell
+python -m src.engine.cli prepare --dataset HDFS
+```
+
+For large datasets, limit the number of lines:
+
+```powershell
+python -m src.engine.cli prepare --dataset HDFS --max-lines 50000
+```
+
+Outputs to `data/processed/HDFS/`: windowed arrays (`X_train.npy`, `X_test.npy`, etc.), Drain3 state (`drain_state.bin`), templates (`templates.json`), and metadata (`meta.json`).
+
+### Step 2 — Train
+
+Trains the LSTM autoencoder on normal windows:
+
+```powershell
+python -m src.engine.cli train --dataset HDFS
+```
+
+To use the Transformer variant:
+
+```powershell
+python -m src.engine.cli train --dataset HDFS --model transformer
+```
+
+Outputs the model checkpoint to `data/checkpoints/HDFS/model.pt`.
+
+### Step 3 — Evaluate
+
+Scores the test set, fits the cascade graph, and computes metrics:
+
+```powershell
+python -m src.engine.cli evaluate --dataset HDFS
+```
+
+Outputs `data/checkpoints/HDFS/eval.json` and `data/checkpoints/HDFS/cascade_graph.json`.
+
+### Step 4 — Replay (Optional)
+
+Streams a log file through the trained engine as if it were live input:
+
+```powershell
+python -m src.engine.cli replay --dataset HDFS --file data/raw/HDFS_v1/HDFS.log --max-lines 5000
+```
+
+Prints alerts as JSON and a final status summary.
+
+## Launching the Dashboard
+
+After running at least `prepare` and `train`, start the web server:
+
+```powershell
+python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+Open the dashboard in a browser:
+
+```text
+http://127.0.0.1:8000
+```
+
+The engine loads automatically from the latest model artifacts on startup.
+
+## Dashboard Guide
+
+The dashboard is a minimal, self-contained, monochrome web UI served at the root URL. It has the following sections:
+
+### Header
+
+Displays the system title and a live health indicator. A filled dot means the engine is loaded and ready; an empty dot means artifacts are missing or the server is starting.
+
+### Status Panel
+
+Nine stat cards showing real-time engine state:
+
+```text
+Dataset          — active dataset (e.g. HDFS)
+Model Kind       — lstm or transformer
+Vocab Size       — number of Drain3 templates
+Window Size      — sliding-window length
+Lines Processed  — total raw lines ingested
+Windows Scored   — total windows scored by the autoencoder
+Alerts Fired     — total anomaly alerts produced
+Last Score       — most recent reconstruction error
+Last Threshold   — current dynamic threshold value
+```
+
+These update every 3 seconds via the `/status` API.
+
+### Pipeline Controls
+
+Run the offline pipeline stages directly from the browser:
+
+```text
+1. Select a dataset from the dropdown (HDFS, BGL, Thunderbird, ZooKeeper)
+2. Click Prepare → parses logs and builds windows
+3. Click Train  → trains the autoencoder model
+4. Click Evaluate → scores test data and fits the cascade graph
+```
+
+Each button disables while running and shows results (or errors) in the output box below. After training, the engine automatically reloads.
+
+### Log Ingestion
+
+Paste raw log lines into the text area and click Submit. The lines are sent to the live engine for real-time scoring. The result shows:
+
+```text
+Lines processed  — how many lines were accepted
+Alerts returned  — how many triggered anomaly alerts
+Last Score       — the final reconstruction error
+Last Threshold   — the current dynamic threshold
+```
+
+### Alerts Table
+
+A live-updating table of anomaly alerts with columns:
+
+```text
+Time             — when the alert was produced
+Component        — which log component/service
+Score            — reconstruction error value
+Threshold        — dynamic threshold at that moment
+Severity         — WARNING or CRITICAL badge
+Cascade          — cascade assessment level (none/watch/imminent)
+At Risk          — downstream components likely to fail next
+Suspect Template — the worst-reconstructed log template (likely culprit)
+```
+
+Updates every 3 seconds. Shows the 50 most recent alerts.
+
+### Cascade State
+
+Current failure-cascade assessment:
+
+```text
+Level            — none, watch, or imminent
+Spread           — number of currently active anomalous components
+Active           — list of components with recent alerts
+At Risk          — downstream components with predicted failure probability
+```
+
+### Log Templates
+
+A collapsible section listing all Drain3-discovered templates. Click to expand. Each entry shows the Event ID and the extracted template pattern.
+
+### Evaluation Metrics
+
+Click Load Eval to fetch cached evaluation results. Displays side-by-side boxes for:
+
+```text
+Autoencoder      — AUROC, AUPRC, Best F1, Precision, Recall (or a note if undefined)
+Isolation Forest — same metrics for the baseline model
+Cascade Analysis — alert count, component count, edge count in the learned graph
+```
+
+If the autoencoder section includes dynamic-threshold results, those are shown as well (precision, recall, F1, alert count).
+
+## API Reference
+
+All endpoints are served by the FastAPI backend:
+
+### Health & Status
+
+```text
+GET  /health              — {"status": "ok", "engine_loaded": true/false}
+GET  /status              — engine stats (dataset, model, vocab, lines, alerts, scores, etc.)
+```
+
+### Live Ingestion
+
+```text
+POST /ingest              — body: {"lines": ["raw log line 1", "raw log line 2", ...]}
+                            returns: {lines, alerts[], last_score, last_threshold}
+```
+
+### Alert & Cascade Queries
+
+```text
+GET  /alerts?limit=50     — recent anomaly alerts (newest first)
+GET  /cascade             — current cascade assessment (level, spread, active, at_risk)
+GET  /templates?limit=200 — discovered Drain3 templates {event_id: template_string}
+```
+
+### Pipeline & Evaluation
+
+```text
+POST /pipeline/prepare?dataset=HDFS    — run the prepare stage
+POST /pipeline/train?dataset=HDFS      — run training (reloads engine on success)
+POST /pipeline/evaluate?dataset=HDFS   — run evaluation
+GET  /eval?dataset=HDFS                — fetch cached evaluation results
+```
+
+### Threshold Management
+
+```text
+POST /threshold/reset     — reset the dynamic threshold history
+```
+
+### Interactive API Docs
+
+FastAPI automatically generates interactive documentation:
+
+```text
+http://127.0.0.1:8000/docs      — Swagger UI
+http://127.0.0.1:8000/redoc     — ReDoc
+```
+
+## Testing & Smoke Simulation Guide (Prep, Train, Eval)
+
+For testing and verification without downloading full multi-gigabyte LogHub datasets, use the included bounded smoke-test sample: `data/raw/HDFS/HDFS_2k.log`.
+
+### 1. Set Up the Test Data
+
+The default configuration expects logs at `data/raw/HDFS_v1/HDFS.log`. Copy the sample file into the expected location:
+
+**PowerShell (Windows):**
+```powershell
+New-Item -ItemType Directory -Force -Path "data/raw/HDFS_v1"
+Copy-Item "data/raw/HDFS/HDFS_2k.log" "data/raw/HDFS_v1/HDFS.log"
+```
+
+**Bash (Linux / macOS):**
+```bash
+mkdir -p data/raw/HDFS_v1
+cp data/raw/HDFS/HDFS_2k.log data/raw/HDFS_v1/HDFS.log
+```
+
+---
+
+### 2. Method A: Command-Line Testing (CLI)
+
+Run each stage in sequence to verify the end-to-end pipeline:
+
+#### Step 1: Prepare (Mining & Windowing)
+Parses the raw logs with Drain3 and generates sliding-window feature sequences:
+```powershell
+python -m src.engine.cli prepare --dataset HDFS
+```
+*Expected output:*
+```json
+prepare done: {"vocab_size": 18, "window_size": 20, "lines": 2000, "windows": 1994, "n_train": 797, "n_test": 1197, "anomalous_test_windows": 0}
+```
+*Artifacts generated:*
+- `data/processed/HDFS/drain_state.bin` — Drain3 cluster state
+- `data/processed/HDFS/templates.json` — Discovered log templates
+- `data/processed/HDFS/X_train.npy`, `X_test.npy` — Window arrays
+
+#### Step 2: Train (LSTM Autoencoder)
+Trains the unsupervised model on normal sequences:
+```powershell
+python -m src.engine.cli train --dataset HDFS
+```
+*Expected output:*
+- Loss printed per epoch (`train=X.XXXX val=X.XXXX`)
+- Saved model checkpoint: `data/checkpoints/HDFS/model.pt` with calibration stats (`calib={'median': ..., 'quantile_value': ...}`).
+
+To test the Transformer architecture instead:
+```powershell
+python -m src.engine.cli train --dataset HDFS --model transformer
+```
+
+#### Step 3: Evaluate (Scoring & Cascade Fitting)
+Scores test windows, applies dynamic thresholds, and fits the component propagation graph:
+```powershell
+python -m src.engine.cli evaluate --dataset HDFS
+```
+*Expected output:*
+```json
+{
+  "autoencoder": {
+    "note": "test split has a single class; supervised metrics undefined"
+  },
+  "isolation_forest": {
+    "note": "test split has a single class; supervised metrics undefined"
+  },
+  "cascade": {
+    "alerts": 355,
+    "components": 5,
+    "edges": 16
+  }
+}
+```
+*(Note: Because the 2k smoke sample has no ground-truth anomaly labels file, supervised F1/ROC metrics are reported as undefined, which is expected.)*
+*Artifacts generated:*
+- `data/checkpoints/HDFS/eval.json`
+- `data/checkpoints/HDFS/cascade_graph.json`
+
+#### Step 4: Replay (Simulated Live Streaming)
+Simulates streaming raw log lines through the running inference engine:
+```powershell
+python -m src.engine.cli replay --dataset HDFS --file data/raw/HDFS_v1/HDFS.log --max-lines 200
+```
+Outputs stream of JSON alert objects (severity, cascade level, suspect template) and a final status report (`lines`, `windows`, `alerts`).
+
+---
+
+### 3. Method B: Testing via the Web UI Dashboard
+
+You can trigger all stages and test live inference without touching the terminal:
+
+1. **Start the API & Dashboard**:
+   ```powershell
+   python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+   ```
+2. Open **`http://127.0.0.1:8000`** in your browser.
+3. Under **Pipeline Controls**:
+   - Ensure `HDFS` is selected in the dropdown.
+   - Click **`Prepare`** → Watches progress and returns window/vocab counts in the box below.
+   - Click **`Train`** → Trains the model and automatically reloads the live engine in-memory.
+   - Click **`Evaluate`** → Evaluates test data and fits the cascade graph.
+4. Under **Evaluation Metrics**:
+   - Click **`Load Eval`** → Displays Autoencoder, Isolation Forest, and Cascade Graph metrics side-by-side.
+5. Under **Log Ingestion**:
+   - Paste a sample log line from `data/raw/HDFS/HDFS_2k.log`, for example:
+     ```text
+     081109 203518 143 INFO dfs.DataNode$DataXceiver: Receiving block blk_-16089612642432864 src: /10.250.19.102:54106 dest: /10.250.19.102:50010
+     ```
+   - Click **`Submit`** → View the calculated score, dynamic threshold, and any alerts.
+6. Under **Alerts** and **Cascade State**:
+   - Review live alerts and current cascade propagation risk.
+
+---
+
+### 4. Method C: Testing via REST API (cURL / PowerShell)
+
+Test the pipeline endpoints programmatically:
+
+```powershell
+# Prepare
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/pipeline/prepare?dataset=HDFS"
+
+# Train
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/pipeline/train?dataset=HDFS"
+
+# Evaluate
+Invoke-RestMethod -Method Post "http://127.0.0.1:8000/pipeline/evaluate?dataset=HDFS"
+
+# Get cached evaluation results
+Invoke-RestMethod -Method Get "http://127.0.0.1:8000/eval?dataset=HDFS"
+
+# Test ingestion
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/ingest" `
+  -Headers @{"Content-Type"="application/json"} `
+  -Body '{"lines":["081109 203518 143 INFO dfs.DataNode$DataXceiver: Receiving block blk_-1 src: /10.0.0.1:100 dest: /10.0.0.2:200"]}'
+```
+
+---
+
+### 5. Automated Unit & Integration Tests
+
+Run the full pytest suite:
+
+```powershell
+python -m pytest -q
+```
+
+To run a specific module test:
+
+```powershell
+# Test model architectures and training
+python -m pytest tests/test_model.py -v
+
+# Test API routes and ingestion responses
+python -m pytest tests/test_api.py -v
+
+# Test sliding window buffer
+python -m pytest tests/test_buffer.py -v
+
+# Test Drain3 parser
+python -m pytest tests/test_parser.py -v
+
+# Test cascade propagation graph
+python -m pytest tests/test_cascade.py -v
+
+# Test dynamic thresholding
+python -m pytest tests/test_threshold.py -v
+```
+
+To verify Python code syntax across the entire repo:
+
+```powershell
+python -m compileall -q api src tests
+```
 
 ## Member 1 — Data & ML
 
