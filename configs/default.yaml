@@ -1,0 +1,105 @@
+dataset: HDFS            # HDFS | BGL | Thunderbird | ZooKeeper (override: LOGCASCADE_DATASET)
+
+paths:
+  raw: data/raw
+  processed: data/processed
+  checkpoints: data/checkpoints
+
+# Per-dataset ingestion + windowing. group_by: entity | component | global
+datasets:
+  HDFS:
+    file: HDFS_v1/HDFS.log
+    labels: HDFS_v1/preprocessed/anomaly_label.csv   # block-level labels
+    group_by: entity          # one session per blk_id
+    window_size: 20
+    stride: 1
+    train_ratio: 0.4          # chronological split; only normal windows are used to train
+  BGL:
+    file: BGL/BGL.log
+    group_by: component       # rack-midplane
+    window_size: 20
+    stride: 5
+    train_ratio: 0.6
+  Thunderbird:
+    file: Thunderbird/Thunderbird.log
+    group_by: component       # node
+    window_size: 20
+    stride: 5
+    train_ratio: 0.6
+  ZooKeeper:
+    file: Zookeeper/Zookeeper.log    # Loghub ZooKeeper has no labels -> train on all, no supervised eval
+    group_by: global
+    window_size: 20
+    stride: 2
+    train_ratio: 0.7
+
+parser:                       # Drain3
+  depth: 4
+  sim_th: 0.4
+  max_children: 100
+  max_clusters: null
+
+model:
+  kind: lstm                  # lstm | transformer
+  lstm:
+    embed_dim: 32
+    hidden_dim: 64
+    latent_dim: 16
+    num_layers: 1
+    dropout: 0.1
+  transformer:
+    d_model: 64
+    nhead: 4
+    num_layers: 2
+    ff_dim: 128
+    latent_dim: 16
+    dropout: 0.1
+
+train:
+  epochs: 30
+  batch_size: 256
+  lr: 0.002
+  weight_decay: 0.0001
+  val_frac: 0.1
+  patience: 4
+  dedupe: true                # unique windows only (sliding windows are highly redundant)
+  device: auto
+  seed: 42
+  calib_quantile: 0.995       # quantile of validation (normal) errors stored in the checkpoint
+
+threshold:
+  window: 2000                # rolling history of recent "normal-ish" scores
+  k: 6.0                      # threshold = median + k * 1.4826 * MAD
+  min_samples: 200            # before this, fall back to the calibrated static threshold
+  min_consecutive: 1          # require N consecutive exceedances (debounce)
+  floor_mult: 0.8             # dynamic threshold never drops below floor_mult * calib quantile
+
+baseline:
+  n_estimators: 200
+  max_fit_samples: 100000
+
+cascade:
+  horizon_s: 300              # how far ahead an anomaly can "cause" another
+  gap_s: 60                   # alerts closer than this on one component = same onset
+  tau_s: 120                  # exponential decay of an onset's influence
+  prior: 1.0                  # Laplace-style pseudo-count in P(A->B)
+  watch: 0.30
+  imminent: 0.60
+  min_spread: 2
+  learn_online: true
+
+actuator:
+  cooldown_s: 60
+  log: {enabled: true, min_severity: warning}
+  webhook: {enabled: false, url: "http://localhost:9000/hook", min_severity: critical, timeout_s: 2.0}
+  command:                    # allowlisted argv templates; dry_run=true only logs what would run
+    enabled: false
+    dry_run: true
+    min_severity: critical
+    argv: ["/usr/local/bin/drain-node.sh", "{component}"]
+
+engine:
+  crit_ratio: 1.5             # score/threshold >= this -> critical
+  online_learning: false      # let Drain3 create new templates while serving
+  max_alerts: 1000
+  max_keys: 50000             # LRU cap on live per-key buffers

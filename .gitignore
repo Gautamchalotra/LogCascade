@@ -1,6 +1,4 @@
-# =========================
 # Python
-# =========================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,66 +8,45 @@ __pycache__/
 venv/
 env/
 
-# =========================
-# Environment / Secrets
-# =========================
+# Environment / secrets
 .env
 .env.*
 !.env.example
 
-# =========================
 # IDE
-# =========================
 .vscode/
 .idea/
 
-# =========================
 # OS
-# =========================
 .DS_Store
 Thumbs.db
 
-# =========================
-# Project data
-# =========================
-data/raw/
-data/processed/
-
-# =========================
-# ML model checkpoints
-# =========================
-data/checkpoints/
+# Project data and ML checkpoints
+data/raw/*
+data/processed/*
+data/checkpoints/*
+!data/*/.gitkeep
 *.pt
 *.pth
 *.bin
 
-# =========================
 # Logs
-# =========================
 *.log
 logs/
 
-# =========================
 # Testing
-# =========================
 .pytest_cache/
 .coverage
 htmlcov/
 
-# =========================
 # Jupyter
-# =========================
 .ipynb_checkpoints/
 
-# =========================
 # Build
-# =========================
 build/
 dist/
 *.egg-info/
 
-# =========================
 # Temporary files
-# =========================
 *.tmp
 *.temp
